@@ -1,0 +1,100 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: armory_db
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  cdn:
+    image: nginx:alpine
+    ports:
+      - "8081:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ../uploads:/var/www/uploads
+    depends_on:
+      - localstack
+
+  mailpit:
+    image: axllent/mailpit
+    container_name: mailpit
+    restart: unless-stopped
+    volumes:
+      - ./data:/data
+    ports:
+      - 8025:8025
+      - 1025:1025
+    environment:
+      MP_MAX_MESSAGES: 5000
+      MP_DATABASE: /data/mailpit.db
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+
+  localstack:
+    image: localstack/localstack:3.8.1
+    environment:
+      - SERVICES=s3,sqs
+      - DEFAULT_REGION=us-east-1
+      - DATA_DIR=/tmp/localstack/data
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    ports:
+      - "4566:4566"
+    volumes:
+      - localstack_data:/var/lib/localstack
+      - ./init/aws/init-localstack.sh:/etc/localstack/init/ready.d/init.sh
+
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+      - localstack
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=password
+      - DB_NAME=armory_db
+      - AWS_S3_ENDPOINT=http://localstack:4566
+      - AWS_REGION=us-east-1
+      - SMTP_HOST=mailpit
+      - SMTP_PORT=1025
+      - SMTP_FROM=noreply@shop.com
+    command: ["./api"]
+
+  notifier:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    depends_on:
+      - postgres
+      - localstack
+      - mailpit
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=password
+      - DB_NAME=ecommerce
+      - AWS_S3_ENDPOINT=http://localstack:4566
+      - AWS_REGION=us-east-1
+      - SMTP_HOST=mailpit
+      - SMTP_PORT=1025
+      - SMTP_FROM=noreply@shop.com
+    command: ["./notifier"]
+    deploy:
+      replicas: 1
+
+volumes:
+  db_data:
+  localstack_data:
+  mailpit_data:
